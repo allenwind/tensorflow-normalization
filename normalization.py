@@ -1,155 +1,109 @@
 import tensorflow as tf
-
-class BatchNormalization(tf.keras.layers.Layer):
-    pass
-
+from tensorflow.keras.layers import *
 
 class LayerNormalization(tf.keras.layers.Layer):
+    """在特征维度的归一化"""
 
-    def __init__(self,
-                 hidden_activation='linear',
-                 hidden_initializer='glorot_uniform',
-                 **kwargs):
+    def __init__(
+        self,
+        epsilon=1e-3,
+        center=True,
+        scale=True,
+        trainable=True,
+        **kwargs):
         super(LayerNormalization, self).__init__(**kwargs)
-        self.hidden_activation = tf.keras.activations.get(hidden_activation)
-        self.hidden_initializer = tf.keras.initializers.get(hidden_initializer)
-        self.epsilon = tf.keras.backend.epsilon() ** 2
+        self.epsilon = epsilon # 避免出现0方差
+        self.center = center
+        self.scale = scale
+        self.trainable = trainable
 
     def build(self, input_shape):
-        dims = input_shape[-1]
-        self.gamma = self.add_weight(shape=(dims,),
-                                     initializer='ones',
-                                     name='gamma')
-        self.beta = self.add_weight(shape=(dims,),
-                                    initializer='zeros',
-                                    name='beta')
+        shape = (input_shape[-1],)
+        # 使用简单的初始化
+        if self.center:
+            self.beta = self.add_weight(
+                shape=shape,
+                initializer="zeros",
+                trainable=self.trainable,
+                name="beta"
+            )
+        if self.scale:
+            self.gamma = self.add_weight(
+                shape=shape,
+                initializer="ones",
+                trainable=self.trainable,
+                name="gamma"
+            )
 
     def call(self, inputs):
-        """如果是条件Layer Norm，则默认以list为输入，第二个是condition
-        """
-        beta, gamma = self.beta, self.gamma
-        mean = tf.reduce_mean(inputs, axis=-1, keepdims=True)
-        variance = tf.reduce_mean(tf.square(inputs - mean), axis=-1, keepdims=True)
-        std = tf.sqrt(variance + self.epsilon)
-        outputs = (inputs - mean) / std
-        outputs = outputs * gamma + beta
-        return outputs
+        x = inputs
+        # norm(x) * gamma + beta
+        if self.center:
+            mean = tf.reduce_mean(x, axis=-1, keepdims=True)
+            x = x - mean
+        if self.scale:
+            variance = tf.reduce_mean(tf.square(x), axis=-1, keepdims=True)
+            std = tf.sqrt(variance + self.epsilon)
+            x = x / std * self.gamma
+        if self.center:
+            x = x + self.beta
+        return x
 
     def compute_output_shape(self, input_shape):
         return input_shape
 
-class GroupNormalization(Layer):
-    
-    def __init__(self, group_axis=(-1,)):
-        self.group_axis = group_axis
-        self.epsilon = tf.keras.backend.epsilon() ** 2
+class BatchSequenceNormalization(tf.keras.layers.Layer):
+    """在一个batch上序列方向即axis=1计算均值和方差然后再标准化，
+    用在时间序列相关问题上。"""
 
-    def build(self, input_shape):
-        pass
-
-class InstanceNormalization(Layer):
-    pass
-
-class BatchSequenceNormalization(Layer):
-    # TODO mask
-    # TODO reduce_variance
-
-    def __init__(self, **kwargs):
+    def __init__(
+        self,
+        epsilon=1e-3,
+        center=True,
+        scale=True,
+        trainable=True,
+        **kwargs):
         super(BatchSequenceNormalization, self).__init__(**kwargs)
-        self.epsilon = tf.keras.backend.epsilon() ** 2
+        self.epsilon = epsilon # 避免出现0方差
+        self.center = center
+        self.scale = scale
+        self.trainable = trainable
 
     def build(self, input_shape):
-        dims = input_shape[-1]
-        self.gamma = self.add_weight(shape=(dims,), initializer="ones", name="beta")
-        self.beta = self.add_weight(shape=(dims,), initializer="zeros", name="gamma")
+        shape = (input_shape[-1],)
+        # 使用简单的初始化
+        if self.center:
+            self.beta = self.add_weight(
+                shape=shape,
+                initializer="zeros",
+                trainable=self.trainable,
+                name="beta"
+            )
+        if self.scale:
+            self.gamma = self.add_weight(
+                shape=shape,
+                initializer="ones",
+                trainable=self.trainable,
+                name="gamma"
+            )
 
-    def call(self, inputs):
-        mean = tf.reduce_mean(inputs, axis=[0, -1], keepdims=True)
-        variance = tf.reduce_mean(tf.square(inputs - mean), axis=[0, -1], keepdims=True)
-        std = tf.sqrt(variance, self.epsilon)
-        outputs = (inputs - mean) / std
-        outputs = outputs * self.gamma + self.beta
-        return outputs
+    def call(self, inputs, mask=None):
+        if mask is None:
+            mask = 1.0
+        else:
+            mask = tf.expand_dims(tf.cast(mask, tf.float32), axis=-1)
+        x = inputs
+        if self.center:
+            # (1, 1, hdims)
+            mean = tf.reduce_sum(inputs, axis=[0, 1], keepdims=True) / tf.reduce_sum(mask)
+            x = x - mean
+        if self.scale:
+            variance = tf.reduce_sum(tf.square(x), axis=[0, 1], keepdims=True) / tf.reduce_sum(mask)
+            std = tf.sqrt(variance + self.epsilon)
+            x = x / std * self.gamma
+        if self.center:
+            x = x + self.beta
+        return x
 
     def compute_output_shape(self, input_shape):
         return input_shape
-
-class ConditionalLayerNormalization(Layer):
-    """(Conditional) Layer Normalization
-    hidden_*系列参数仅为有条件输入时(conditional=True)使用
-    """
-    def __init__(self,
-                 conditional=False,
-                 hidden_units=None,
-                 hidden_activation='linear',
-                 hidden_initializer='glorot_uniform',
-                 **kwargs):
-        super(LayerNormalization, self).__init__(**kwargs)
-        self.conditional = conditional
-        self.hidden_units = hidden_units
-        self.hidden_activation = activations.get(hidden_activation)
-        self.hidden_initializer = initializers.get(hidden_initializer)
-        self.epsilon = K.epsilon() * K.epsilon()
-
-    def build(self, input_shape):
-        super(LayerNormalization, self).build(input_shape)
-
-        if self.conditional:
-            shape = (input_shape[0][-1], )
-        else:
-            shape = (input_shape[-1], )
-
-        self.gamma = self.add_weight(shape=shape,
-                                     initializer='ones',
-                                     name='gamma')
-        self.beta = self.add_weight(shape=shape,
-                                    initializer='zeros',
-                                    name='beta')
-
-        if self.conditional:
-
-            if self.hidden_units is not None:
-                self.hidden_dense = Dense(
-                    units=self.hidden_units,
-                    activation=self.hidden_activation,
-                    use_bias=False,
-                    kernel_initializer=self.hidden_initializer)
-
-            self.beta_dense = Dense(units=shape[0],
-                                    use_bias=False,
-                                    kernel_initializer='zeros')
-            self.gamma_dense = Dense(units=shape[0],
-                                     use_bias=False,
-                                     kernel_initializer='zeros')
-
-    def call(self, inputs):
-        """如果是条件Layer Norm，则默认以list为输入，第二个是condition
-        """
-        if self.conditional:
-            inputs, cond = inputs
-            if self.hidden_units is not None:
-                cond = self.hidden_dense(cond)
-            for _ in range(K.ndim(inputs) - K.ndim(cond)):
-                cond = K.expand_dims(cond, 1)
-            beta = self.beta_dense(cond)
-            gamma = self.gamma_dense(cond)
-            beta, gamma = self.beta + beta, self.gamma + gamma
-        else:
-            beta, gamma = self.beta, self.gamma
-
-        mean = K.mean(inputs, axis=-1, keepdims=True)
-        variance = K.mean(K.square(inputs - mean), axis=-1, keepdims=True)
-        std = K.sqrt(variance + self.epsilon)
-        outputs = (inputs - mean) / std
-        outputs = outputs * gamma + beta
-        return outputs
-
-    def get_config(self):
-        config = {
-            'conditional': self.conditional,
-            'hidden_units': self.hidden_units,
-            'hidden_activation': activations.serialize(self.hidden_activation),
-            'hidden_initializer': initializers.serialize(self.hidden_initializer),
-        }
-        base_config = super(LayerNormalization, self).get_config()
-        return dict(list(base_config.items()) + list(config.items()))
