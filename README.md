@@ -7,3 +7,8 @@ Tensorflow实现的Normalization，包括:
 - BatchSequenceNormalization
 
 用于序列类型数据。
+
+TODO:
+
+- GroupNormalization
+- InstanceNormalization
